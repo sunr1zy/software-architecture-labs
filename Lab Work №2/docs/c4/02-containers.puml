@@ -1,0 +1,37 @@
+@startuml 02-containers
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title АрендаБот — диаграмма контейнеров (C4-L2)
+
+System_Ext(tg, "Telegram Bot API", "Платформа мессенджера (SH-05)")
+System_Ext(ocr, "Сервис распознавания показаний (OCR/CV)", "Распознавание фото счётчиков (SH-06)")
+
+System_Boundary(arenda, "АрендаБот") {
+    Container(backend, "Bot Backend", "Container: API — Python 3.12, aiogram 3, aiohttp", "Принимает обновления от Telegram, ведёт диалоги, вся бизнес-логика: объекты, приглашения, чеки, показания, расчёты, сводки, подписка")
+    Container(scheduler, "Reminder Scheduler", "Container: Scheduler — Python 3.12, APScheduler", "Раз в минуту находит наступившие напоминания и повторы (FR-05), раз в сутки — просрочки (FR-15), ставит задания в очередь")
+    Container(worker, "Notification Worker", "Container: Worker — Python 3.12, aio-pika, aiogram Bot", "Отправляет напоминания и уведомления в Telegram с соблюдением лимитов, повторяет при ошибках")
+
+    ContainerQueue(mq, "Message Broker", "Container: Queue — RabbitMQ 3.13", "Durable-очередь notifications, отложенные повторы через DLX")
+    ContainerDb(db, "Main DB", "Container: Database — PostgreSQL 16", "Пользователи, объекты, арендаторы, графики, показания, тарифы, платежи, долги, подписки")
+    ContainerDb(redis, "Cache", "Container: Cache — Redis 7", "Состояния диалогов (FSM), счётчик лимита отправки")
+    ContainerDb(s3, "File Storage", "Container: Object Storage — S3 API (Yandex Object Storage)", "Фото и PDF чеков, квитанций, счётчиков, заявок; шифрование SSE-KMS")
+}
+
+Rel(tg, backend, "Доставляет обновления: сообщения, нажатия кнопок, события оплаты", "HTTPS webhook, JSON")
+Rel(backend, tg, "Отвечает пользователю, скачивает файлы, выставляет счёт (sendMessage, getFile, sendInvoice)", "HTTPS/REST")
+Rel(backend, ocr, "Запрашивает распознавание фото счётчика", "HTTPS/REST, JSON")
+Rel(backend, db, "Читает и записывает данные", "SQL, asyncpg/TCP")
+Rel(backend, redis, "Хранит состояние диалога", "RESP/TCP")
+Rel(backend, s3, "Сохраняет и читает файлы", "HTTPS, S3 API")
+Rel(backend, mq, "Публикует события-уведомления (чек проверен, статус заявки изменён)", "AMQP 0-9-1")
+
+Rel(scheduler, db, "Выбирает наступившие напоминания и просрочки, отмечает поставленные в очередь", "SQL, asyncpg/TCP")
+Rel(scheduler, mq, "Ставит задания на отправку напоминаний", "AMQP 0-9-1")
+
+Rel(mq, worker, "Доставляет задания на отправку", "AMQP 0-9-1")
+Rel(worker, redis, "Проверяет лимит отправки (token bucket, ≤ 25 сообщений/с)", "RESP/TCP")
+Rel(worker, tg, "Отправляет напоминания и уведомления (sendMessage)", "HTTPS/REST")
+Rel(worker, db, "Записывает статус доставки", "SQL, asyncpg/TCP")
+
+SHOW_LEGEND()
+@enduml

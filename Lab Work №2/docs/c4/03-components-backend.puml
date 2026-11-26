@@ -1,0 +1,67 @@
+@startuml 03-components-backend
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title АрендаБот — компоненты контейнера Bot Backend (C4-L3)
+
+System_Ext(tg, "Telegram Bot API", "SH-05")
+System_Ext(ocr, "Сервис распознавания (OCR/CV)", "SH-06")
+ContainerDb(db, "Main DB", "PostgreSQL 16")
+ContainerDb(redis, "Cache", "Redis 7")
+ContainerDb(s3, "File Storage", "S3 API")
+ContainerQueue(mq, "Message Broker", "RabbitMQ 3.13")
+
+Container_Boundary(backend, "Bot Backend") {
+    Component(handlers, "Telegram Handlers", "Component: aiogram 3 Dispatcher, Routers, FSM, Middleware", "Controller: принимает webhook, разбирает команды и кнопки, ведёт пошаговые диалоги, проверяет доступ. Единственный слой, знающий о Telegram (A-12)")
+
+    Component(property, "PropertyService", "Component: Application Service, Python", "Объекты, шаблоны процессов, графики напоминаний, схема оплаты ЖКУ. FR-01, FR-02, FR-04, FR-11")
+    Component(tenancy, "TenancyService", "Component: Application Service, Python", "Одноразовые приглашения на 72 ч, заявки на ремонт. FR-03, FR-13")
+    Component(payment, "PaymentConfirmationService", "Component: Application Service, Python", "Приём чеков, подтверждение/отклонение, квитанции к возмещению. FR-06, FR-07, FR-12")
+    Component(meter, "MeterReadingService", "Component: Application Service, Python", "Приём показаний, проверка «не меньше предыдущего», распознавание по фото. FR-08, FR-10")
+    Component(report, "SummaryReportService", "Component: Application Service, Python, openpyxl", "Сводка по объектам за месяц, выгрузка XLSX. FR-14, FR-16")
+    Component(account, "AccountService", "Component: Application Service, Python", "Роли, согласие на обработку ПДн, блокировка, подписка и лимит объектов. FR-17, FR-18, NFR-03")
+
+    Component(billing, "BillingCalculator", "Component: Domain Service + Domain Model, Python", "Расход по счётчикам, сумма по тарифам, начисления и задолженность. FR-09, FR-15")
+
+    Component(repos, "Repositories", "Component: Repository, SQLAlchemy 2 (async)", "Доступ к данным с фильтрацией по владельцу объекта (NFR-03)")
+    Component(ocrClient, "OcrClient", "Component: Integration, httpx", "Адаптер сервиса распознавания: таймаут 5 с, порог уверенности. FR-10, NFR-04")
+    Component(files, "FileStorageAdapter", "Component: Integration, aioboto3", "Загрузка и выдача файлов по временным ссылкам, шифрование. NFR-03")
+    Component(publisher, "EventPublisher", "Component: Message Publisher, aio-pika", "Публикует события-уведомления для Notification Worker. FR-07, FR-13, FR-17")
+}
+
+Rel(tg, handlers, "Обновления", "HTTPS webhook")
+Rel(handlers, tg, "Ответы, скачивание файлов, счёт на подписку", "HTTPS/REST")
+Rel(handlers, redis, "Состояние диалога", "RESP")
+
+Rel(handlers, account, "Проверка роли, блокировки, согласия; оплата подписки", "in-process call")
+Rel(handlers, property, "Use case", "in-process call")
+Rel(handlers, tenancy, "Use case", "in-process call")
+Rel(handlers, payment, "Use case", "in-process call")
+Rel(handlers, meter, "Use case", "in-process call")
+Rel(handlers, report, "Use case", "in-process call")
+
+Rel(meter, ocrClient, "Распознать фото", "in-process call")
+Rel(ocrClient, ocr, "Фото → число и уверенность", "HTTPS/REST, JSON")
+Rel(meter, billing, "Рассчитать расход и сумму", "in-process call")
+Rel(payment, billing, "Пересчитать задолженность", "in-process call")
+Rel(report, billing, "Получить начисления и долги", "in-process call")
+
+Rel(payment, files, "Чеки и квитанции", "in-process call")
+Rel(meter, files, "Фото счётчиков", "in-process call")
+Rel(tenancy, files, "Фото к заявкам", "in-process call")
+Rel(files, s3, "PUT / GET объектов", "HTTPS, S3 API")
+
+Rel(property, repos, "Чтение/запись", "in-process call")
+Rel(tenancy, repos, "Чтение/запись", "in-process call")
+Rel(payment, repos, "Чтение/запись", "in-process call")
+Rel(meter, repos, "Чтение/запись", "in-process call")
+Rel(report, repos, "Чтение", "in-process call")
+Rel(account, repos, "Чтение/запись", "in-process call")
+Rel(repos, db, "Запросы", "SQL, asyncpg")
+
+Rel(payment, publisher, "Чек подтверждён / отклонён", "in-process call")
+Rel(tenancy, publisher, "Статус заявки изменён", "in-process call")
+Rel(account, publisher, "Пользователь заблокирован", "in-process call")
+Rel(publisher, mq, "Публикация события", "AMQP publish")
+
+SHOW_LEGEND()
+@enduml
